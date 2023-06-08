@@ -1,0 +1,804 @@
+---
+title: "prostate cancer IDS project"
+author: "Nismabi A N and Aiman Bushra"
+date: "10/03/2023"
+output: html_document
+---
+
+```{r packages, eval=FALSE, warning=FALSE, include=FALSE}
+install.packages(c("tidyverse", "dplyr", "caret", "corrplot", "matrixStats","BiocManager"))
+BiocManager::install("GenomeInfoDbData")
+BiocManager::install("TCGAbiolinks")
+BiocManager::install("survival")
+BiocManager::install("edgeR")
+install.packages("gprofiler2")
+install.packages("survminer")
+BiocManager::install("SummarizedExperiment")
+BiocManager::install("genefilter")
+BiocManager::install("glmnet")
+BiocManager::install("limma")
+BiocManager::install("factoextra")
+BiocManager::install("FactoMineR")
+BiocManager::install("gplots")
+BiocManager::install("RColorBrewer")
+install.packages("survminer")
+```
+
+```{r libraries, message=FALSE, warning=FALSE, include=TRUE}
+library(TCGAbiolinks)
+library(survival)
+library(dplyr)
+library(plyr)
+library(tidyr)
+library(tidyverse)
+library(caret)
+library(corrplot)
+library(matrixStats)
+library(gprofiler2)
+library(limma)
+library(survminer)
+library(edgeR)
+library(SummarizedExperiment)
+library(genefilter)
+library(glmnet)
+library(factoextra)
+library(FactoMineR)
+library(gplots)
+library(RColorBrewer)
+library(survminer)
+```
+
+
+# Prostate adenocarcinoma RNA-Seq analysis
+
+## using TCGA-PRAD project form GDC
+
+***
+
+### Data Query from GDC:
+
+*GDCquery* function was used to access Prostate cancer cases from GDC from TCGA-PRAD project. Transcriptome Profiling was selected as data category, RNA-seq as experimental strategy, STAR-counts as the workfow type, and sample type selected were Primary Tumor and Solid Normal Tissue. 
+
+#First, we checked the list of GDCprojects:
+```{r, eval=FALSE, warning=FALSE, include=FALSE}
+GDCprojects = getGDCprojects()
+head(GDCprojects[c("project_id", "name")])
+
+#I selected TCGA-PRAD, which is a project on Prostate adenocarcinoma (PRAD).
+#Prostate adenocarcinoma (PRAD) is a common type of prostate cancer that begins when normal prostate cells start #to grow uncontrollably, eventually forming a tumor. It is typically slow-growing and may not cause symptoms for #many years, but it can also be aggressive and spread quickly to other parts of the body
+
+TCGAbiolinks:::getProjectSummary("TCGA-PRAD")
+
+```
+# Data Query from GDC:
+
+```{r Query_TP,warning=FALSE}
+#then we started making a query on Transciptome profiling data:
+
+#build a query
+query_TCGA = GDCquery(
+  project = "TCGA-PRAD",
+  data.category = "Transcriptome Profiling")
+
+# Visualize the result
+
+## querying all RNA-seq data from  project as the experimental strategy and
+# set the work flow type as STAR- COUNTS
+
+query_TCGA = GDCquery(
+  project = "TCGA-PRAD",
+  data.category = "Transcriptome Profiling",
+  experimental.strategy = "RNA-Seq",
+  workflow.type = "STAR - Counts")
+
+```
+
+Getting to know the dataset --
+
+```{r,warning=FALSE}
+# WE USED THE COMMAND TO GET THE RESULT TO VISUALISE THE QUERY RESULTS IN MORE READABLE WAY
+##Visualize the query results
+
+prad_res = getResults(query_TCGA) # make results as table
+
+# head(prad_res) # data of the first 6 patients.
+colnames(prad_res) # columns present in the table
+head(prad_res$sample_type) # first 6 types of tissue.
+class(prad_res$sample_type)
+prad_res$sample_type <- as.factor(prad_res$sample_type)
+summary(prad_res$sample_type) # summary of distinct tissues types present in this study
+
+##for simplicity, we ignore the small class of metastasis, therefore, we redo the query
+
+query_TCGA = GDCquery( project = "TCGA-PRAD",
+                       
+                       data.category = "Transcriptome Profiling",
+                       
+                       experimental.strategy = "RNA-Seq",
+                       
+                       workflow.type = "STAR - Counts",
+                       
+                       sample.type = c("Primary Tumor", "Solid Tissue Normal"),
+                       
+                       data.type= "Gene Expression Quantification",
+                       
+                       access="open")
+```
+
+#CHECK THE WORKING DIRECTORY AND SET IT TO THE DESIRED FOLDER
+
+```{r,warning=FALSE, eval=FALSE, warning=FALSE, include=FALSE}
+getwd()
+setwd("C:/Users/lenovo/Documents")
+```
+
+##Next, we need to download the files from the query
+
+```{r,warning=FALSE, eval=FALSE, include=FALSE}
+GDCdownload(query = query_TCGA)
+tcga_data = GDCprepare(query_TCGA)
+View(tcga_data)
+assay$tcga_data
+colnames(colData(tcga_data))
+```
+# save the file
+```{r,warning=FALSE, eval=FALSE, include=FALSE}
+saveRDS(object = tcga_data,
+        file = "tcga_data.RDS",
+        compress = FALSE)
+
+
+#the data can be loaded and begin from here
+
+tcga_data = readRDS(file = "tcga_data.RDS")
+```
+##Note that both clinical and expression data are present in this object
+```{r,warning=FALSE, eval=FALSE,}
+table(tcga_data@colData$vital_status)
+table(tcga_data@colData$sample_type)
+table(tcga_data@colData$definition)
+table(tcga_data@colData$composition)
+table(tcga_data@colData$paper_Subtype)
+table(tcga_data@colData$paper_Age)
+table(tcga_data@colData$Subtype)
+
+```
+
+#check the gene expression data:
+
+
+```{r,warning=FALSE, eval=FALSE, warning=FALSE}
+dim(assay(tcga_data))     # gene expression matrices
+head(assay(tcga_data)[,1:10]) # expression of first 6 genes and first 10 samples
+head(rowData(tcga_data))     # ensembl id and gene id of the first 6 genes.
+```
+
+# Save the data as a file, if you need it later, you can just load this file
+
+# instead of having to run the whole pipeline again
+
+```{r,warning=FALSE, eval=FALSE,include=FALSE}
+saveRDS(object = tcga_data,
+        file = "tcga_data.RDS",
+        compress = FALSE)
+```
+
+```{r}
+
+#the data can be loaded and begin from here--------
+
+tcga_data = readRDS(file = "tcga_data.RDS")
+```
+
+#Since the dataset is so huge and training take a lot of time, I subsetted the query to 150 samples including 100 Primary Tumor and 50 Solid Tissue Normal to proceed with it:
+
+```{r,warning=FALSE}
+SNT<- tcga_data@colData$sample_type == "Solid Tissue Normal"
+sum(SNT)
+Subset_SNT<- tcga_data$barcode[SNT]
+SNT1<- Subset_SNT[1:50]
+
+PT<-tcga_data@colData$sample_type == "Primary Tumor"
+sum(PT)
+
+Subset_PT<- tcga_data$barcode[PT]
+PT1<- Subset_PT[1:100]
+B <- c(SNT1,PT1)
+
+```
+#update the labels
+```{r}
+
+query_tcga_sub = GDCquery( project = "TCGA-PRAD",
+                           data.category = "Transcriptome Profiling",
+                           experimental.strategy = "RNA-Seq",
+                           workflow.type = "STAR - Counts",
+                           sample.type = c("Primary Tumor", "Solid Tissue Normal"),
+                           data.type= "Gene Expression Quantification",
+                           access="open",
+                           barcode = B )
+```
+
+#downloading the new subsetted query
+```{r}
+GDCdownload(query = query_tcga_sub)
+tcga_data = GDCprepare(query_tcga_sub)
+View(query_tcga_sub)
+
+```
+
+#---------Survival analysis (Simple)---------------------------
+
+#Question: Does race influence survival in prostate cancer patients?
+
+# extract clinical data
+```{r}
+clinical = tcga_data@colData
+dim(clinical)
+
+# we are only interested in the "Primary solid Tumor" cases for survival
+
+clin_df = clinical[clinical$definition == "Primary solid Tumor",
+
+                   c("patient",
+
+                     "vital_status", #whether the patient is alive or dead
+
+                     "days_to_death", #the number of days passed from initial diagnosis to the death
+
+                     "days_to_last_follow_up", #the number of days passed from initial diagnosis to last visit
+
+                     "race")]
+
+ 
+
+# create a new boolean variable that has TRUE for dead patients
+
+# and FALSE for live patients
+
+clin_df$deceased = clin_df$vital_status == "Dead"
+```
+ 
+
+# create an "overall survival" variable that is equal to days_to_death
+```{r}
+# for dead patients, and to days_to_last_follow_up for patients who
+
+# are still alive
+
+clin_df$overall_survival = ifelse(clin_df$deceased,
+
+                                  clin_df$days_to_death,
+
+                                  clin_df$days_to_last_follow_up)
+
+ 
+
+# show first 6 samples
+
+head(clin_df)
+
+table(clin_df$race)
+
+#Let's see if different races have had different prognosis
+
+Surv(clin_df$overall_survival, clin_df$deceased)
+Surv(clin_df$overall_survival, clin_df$deceased) ~ clin_df$race
+
+# fit a survival model
+
+fit = survfit(Surv(overall_survival, deceased) ~ race, data=clin_df)
+print(fit)
+
+ # we produce a Kaplan Meier plot
+
+ggsurvplot(fit, data=clin_df, pval = T)
+
+
+
+#The p-value is 0.95  which is not significant. So race alone does not significantly sway
+
+#prognosis in this dataset.
+# #Check the number of patients dying (or being “censored”) as Time increases with adding the “at risk table”:
+
+ggsurvplot(fit, data=clin_df, pval=T, risk.table=T, risk.table.col="strata",tables.height = 0.30)
+```
+
+
+***
+
+
+### RNA Seq analysis:
+
+#To perform differential expression analysis (DE), Linear Models for Microarray Data **limma** pipline was used. Gene expression results were normalized using TMM followed by voom. Top 100 expressed genes are to be collected in th *topGenes* table.
+
+```{r limma, eval=FALSE, warning=FALSE, include=TRUE}
+limma_pipeline = function(
+  TP.colon,
+  condition_variable,
+  reference_group=NULL){
+  
+  design_factor = colData(TP.colon)[, condition_variable, drop=T]
+  
+  group = factor(design_factor)
+  if(!is.null(reference_group)){group = relevel(group, ref=reference_group)}
+  
+  design = model.matrix(~ group)
+  
+  dge = DGEList(counts=assay(TP.colon),
+                samples=colData(TP.colon),
+                genes=as.data.frame(rowData(TP.colon)))
+  
+  # filtering
+  keep = filterByExpr(dge,design)
+  dge = dge[keep,,keep.lib.sizes=FALSE]
+  rm(keep)
+  
+  # Normalization (TMM followed by voom)
+  dge = calcNormFactors(dge)
+  v = voom(dge, design, plot=TRUE)
+  
+  # Fit model to data given design
+  fit = lmFit(v, design)
+  fit = eBayes(fit)
+  
+  # Show top genes
+  topGenes = topTable(fit, coef=ncol(design), number=50, sort.by="p")
+  
+  return(
+    list(
+      voomObj=v, # normalized data
+      fit=fit, # fitted model and statistics
+      topGenes=topGenes # the 50 most deferentially expressed genes
+    )
+  )
+}
+```
+
+
+To check differences in gene expression between patients diagnosed with primary solid tumor compared to healthy patients using the *limma* function: 
+
+# Save the data as a file, if you need it later, you can just load this file
+
+# instead of having to run the whole pipeline again
+
+```{r}
+saveRDS(object = limma_res,
+        
+        file = "limma_res.RDS",
+        
+        compress = FALSE)
+
+#the data can be loaded and begin from here
+
+limma_res = readRDS(file = "limma_res.RDS")
+
+```
+
+
+To validate if there is performed limma analysis to differentiate between gene expression between the two groups, Principal Component Analysis (PCA) was performed:
+
+```{r PCA}
+#Visualization
+plot_PCA = function(voomObj, condition_variable){
+  group = factor(voomObj$targets[, condition_variable])
+  pca = prcomp(t(voomObj$E))
+  plot(pca$x[,1:2],col=group, pch=19)
+  legend("topleft", inset=.01, levels(group), pch=19, col=1:length(levels(group)))
+  return(pca)
+}
+
+res_pca_1= plot_PCA(limma_res$voomObj, "definition")
+res_pca_2 = plot_PCA(limma_res$voomObj, "vital_status")
+res_pca_3 = plot_PCA(limma_res$voomObj, "ethnicity")
+res_pca_4 = plot_PCA(limma_res$voomObj, "race")
+
+
+```
+
+The code performs PCA analysis and generates plots to visualize the relationship between gene expression data and different clinical variables.
+
+***
+
+## Applying Machine Learning: 
+
+Machine learning algorithms will be used to test and choose the best fitted model to be used to characterize new datasets to be either patients with primary solid tumor, or healthy ones.
+
+#Classification---training and validation
+
+```{r}
+# Transpose and make it into a matrix object
+
+d_mat = as.matrix(t(limma_res$voomObj$E))
+
+
+# As before, we want this to be a factor
+
+d_resp = as.factor(limma_res$voomObj$targets$definition)
+
+table(d_resp)
+
+```
+
+# Divide data into training and testing set
+
+```{r}
+# Set (random-number-generator) seed so that results are consistent between runs.we divide the data into train and test sets, where 75% of the data is used for training, and the remaining 25% for testing:
+
+set.seed(42)
+train_ids = createDataPartition(d_resp, p=0.75, list=FALSE)
+x_train = d_mat[train_ids, ]
+x_test  = d_mat[-train_ids, ]
+
+y_train = d_resp[train_ids]
+y_test  = d_resp[-train_ids]
+
+```
+
+
+### 1. Elastic net model - generalized linear model:  
+
+The output of the DE limma model will be split into two data sets: the test set, which will be used to evaluate the model's performance, and the training set, which will be used to create an accurate model.
+
+The response variable (definition) is first converted to a factor, and the DE gene analysis is then prepared as a matrix.
+Genes were filtered by IQR and a cutoff value of 0.95 to lessen computational load and improve model accuracy. 
+
+```{r Classification}
+d_mat = as.matrix(t(limma_res$voomObj$E)) #this will be the x data
+print(dim(d_mat))
+
+# retain only a small subset of the genes
+d_mat = varFilter(limma_res$voomObj$E, var.func=IQR, var.cutoff=0.95)
+d_mat = t(d_mat)
+print(dim(d_mat))
+
+# Convert the definition into a factor
+d_resp = as.factor(limma_res$voomObj$targets$definition) #this will be the y data
+
+```
+
+Next, 
+To train and evaluate a elastic net model:
+
+```{r Elastic1}
+res_enet = cv.glmnet(
+  x = x_train,
+  y = y_train,
+  alpha = 0.5,
+  family = "binomial")
+
+y_pred_enet = predict(res_enet, newx=x_test, type="class", s="lambda.min")
+
+confusion_matrix_enet = table(y_pred_enet, y_test)
+print(confusion_matrix_enet)
+
+```
+
+### 2. Suppot Vector Machine training (SVM): 
+
+```{r SVM}
+trained_svm <- train(x_train,y_train,method="svmLinear")
+trained_svm$bestTune
+svm_preds <- predict(trained_svm,x_test)
+mean(svm_preds==y_test)
+
+confusionMatrix(svm_preds, y_test)
+```
+
+### 3. Linear Discriminant Analysis training (LDA): 
+
+```{r LDA,warning=FALSE}
+trained_lda <- train(x_train,y_train,method="lda")
+lda_preds <- predict(trained_lda,x_test)
+mean(lda_preds==y_test)
+lda_preds
+confusionMatrix(lda_preds, y_test)
+```
+
+### 4. K-nearest neighbors training (KNN): 
+
+```{r KNN,warning=FALSE}
+set.seed(7, sample.kind = "Rounding")
+tuning <- data.frame(k=seq(3,21,2))
+trained_knn <- train(x_train,y_train,method="knn",tuneGrid = tuning)
+trained_knn$bestTune
+ggplot(trained_knn, highlight = T)
+
+knn_preds <- predict(trained_knn,x_test)
+mean(knn_preds == y_test)
+
+confusionMatrix(knn_preds, y_test)
+```
+
+### 5. hypertuned KNN:
+
+```{r bootstraping1,warning=FALSE}
+# Change the default number of bootstrapping for resampling to 50
+tc <- trainControl(method = "boot", number = 50)
+trained_knn_bs <- train(x_train,y_train,method="knn", trControl = tc)
+ggplot(trained_knn_bs, highlight = T)
+
+knn_preds_bs <- predict(trained_knn_bs,x_test)
+confusionMatrix(knn_preds_bs, y_test)
+mean(knn_preds_bs== y_test)
+```
+
+### 6. KNN-crossval
+
+```{r bootstraping2,warning=FALSE}
+# Change the default resampling method of bootstrapping to 10-fold cross-validation
+tc <- trainControl(method = "cv", number = 10)
+trained_knn_cv <- train(x_train,y_train,method="knn", trControl = tc)
+ggplot(trained_knn_cv, highlight = T)
+```
+
+To compare between changing the number of bootstaping for resampling and changing cross-validation:
+
+```{r bootstraping3,warning=FALSE}
+knn_preds_cv <- predict(trained_knn_cv,x_test)
+confusionMatrix(knn_preds_cv, y_test)
+mean(knn_preds_cv== y_test)
+```
+
+### 7. Random Forest training (RF): 
+
+```{r RF}
+set.seed(9, sample.kind = "Rounding")
+tuning <- data.frame(mtry=c(3,5,7,9))
+trained_rf <- train(x_train,y_train, method="rf",tuneGrid = tuning, importance = TRUE)
+trained_rf$bestTune
+
+trellis.par.set(caretTheme())
+plot(trained_rf)
+
+rf_preds <- predict(trained_rf, x_test)
+confusionMatrix(rf_preds, y_test)
+mean(rf_preds == y_test)
+```
+
+
+## Comparing all models:
+
+```{r comparing}
+models <- c("Elastic net", "SVM", "LDA", "KNN", "KNN-Bootstap","KNN-crossval","Random forest")
+accuracy <- c(mean(y_pred_enet== y_test),
+              mean(svm_preds==y_test),
+              mean(lda_preds == y_test),
+             mean(knn_preds == y_test),
+             mean(knn_preds_bs== y_test),
+             mean(knn_preds_cv== y_test),
+             mean(rf_preds == y_test))
+
+data.frame(Model = models, Accuracy = accuracy)
+df <- data.frame(Model = models, Accuracy = accuracy)
+df
+
+# Define colors for the bars
+colors <- c("Elastic net" = "red", "SVM" = "blue", "LDA" = "green", "KNN" = "orange",
+            "KNN-Bootstap" = "purple", "KNN-crossval" = "brown", "Random forest" = "pink")
+
+# Create a bar plot with different colors for each model
+ggplot(data = df, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(Accuracy*100, 1), "%")), vjust = 3) +
+  ggtitle("Model Accuracy Comparison") +
+  xlab("Model") +
+  ylab("Accuracy") +
+  scale_fill_manual(values = colors) +
+  labs(fill = "") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 14))
+
+#Based on the results in the df dataframe, the LDA and svm models achieved the highest accuracy with a score of 100%, followed by Elastic net, and KNN crossval models with a score of 97%. The KNN-Bootstap and KNN models achieved an accuracy of 94%. Therefore, it can be concluded that the LDA and Random SVM  models are the best performing models for the given test data, and they can be selected for further analysis or implementation.
+```
+
+#Result
+
+# To identify genes that are significantly deferentially expressed:
+```{r}
+#Getting genes that contribute for the prediction
+res_coef = coef(res_enet, s="lambda.min") # the "coef" function returns a sparse matrix
+dim(res_coef)
+head(res_coef) # in a sparse matrix the "." represents the value of zero - all not significant
+View(res_coef)
+
+# get coefficients with non-zero values
+res_coef = res_coef[res_coef[,1] != 0,]
+# note how performing this operation changed the type of the variable
+head(res_coef)
+
+# remove first coefficient as this is the intercept, a variable of the model itself
+res_coef = res_coef[-1]
+relevant_genes = names(res_coef) # get names of the (non-zero) variables.
+length(relevant_genes) # number of selected genes
+relevant_gene_names = limma_res$voomObj$genes[relevant_genes,"gene_name"]
+relevant_gene_names
+```
+
+
+#Then, I checked whether limma and LDA selected some of the same genes:
+
+print(intersect(limma_res$topGenes$gene_id, relevant_genes))
+
+#They have 8 common genes.
+
+
+
+# Hierarchical clustering: 
+Now that we are confident that each sample type have different level of gene expression, we can look into how they are clustering. DE genes from the elastic net is used and is compared to top genes hit from limma (green, left). Top bar represents normal samples (black) and primary tumpr samples (red).
+
+```{r Clustering1}
+
+hmcol = colorRampPalette(rev(brewer.pal(9, "RdBu")))(256)
+
+# perform complete linkage clustering
+clust = function(x) hclust(x, method="complete")
+# use the inverse of correlation as distance.
+dist = function(x) as.dist((1-cor(t(x)))/2)
+
+colorLimmaGenes = ifelse(
+  # Given a vector of boolean values
+  (relevant_genes %in% limma_res$topGenes$gene_id),
+  "blue", # if true, return green for that value
+  "green" # if false, return white for that value
+)
+
+# heatmap involves a lot of parameters
+
+gene_heatmap = heatmap.2(
+  t(d_mat[,relevant_genes]),
+  scale="row",          # scale the values for each gene (row)
+  density.info="none",  # turns off density plot inside color legend
+  trace="none",         # turns off trace lines inside the heat map
+  col=hmcol,            # define the color map
+  labRow=relevant_gene_names, # use gene names instead of ensembl annotation
+  RowSideColors=colorLimmaGenes,
+  labCol=FALSE,         # Not showing column labels
+  ColSideColors=as.character(as.numeric(d_resp)), # Show colors for each response class
+  dendrogram="both",    # Show dendrograms for both axis
+  hclust = clust,       # Define hierarchical clustering method
+  distfun = dist,       # Using correlation coefficient for distance function
+  cexRow=.6,            # Resize row labels
+  margins=c(1,5)        # Define margin spaces
+)
+```
+
+# if need to reset , use the below script
+dev.off()
+
+
+Using clustering to do GO analysis to check if any particular biological pathway:
+
+Gene ontology (GO) analysis is a widely used method for identifying enriched biological processes, molecular functions, and cellular components associated with a set of genes. It involves comparing the genes of interest to a reference set of genes and identifying overrepresented GO terms.
+
+To perform GO analysis, we first need to define our gene set of interest. This can be done using differentially expressed genes or genes selected by other methods.The output of GO analysis typically includes a list of enriched GO terms, their p-values, and their associated genes. This information can help us identify potential biological processes and pathways that are dysregulated in a particular condition and guide future experimental studies.
+
+
+```{r Clustering2}
+# Generate some random data
+set.seed(123)
+data <- matrix(rnorm(1000), ncol = 10)
+
+# Perform K-means clustering
+k <- 2
+km <- kmeans(data, k)
+
+# Extract cluster assignments
+clusters <- km$cluster
+
+
+# Check the length of the clusters object
+length(clusters) == nrow(data) 
+
+# Check for missing values
+sum(is.na(clusters)) == 0 
+
+# Subset the data object based on the clusters
+Up.pro <- names(clusters[clusters %in% 1])
+
+
+##These steps will help you identify and fix any issues with the "clusters" object and 
+##the way you are sub-setting the "data" object based on it.
+
+#Regenerate response
+
+# for prostate cancer
+Up.pro <- names(clusters[clusters %in% 1])
+enrich_pro <- gost(query = relevant_gene_names, organism = "hsapiens", significant = TRUE)
+head(enrich_pro$result)
+gostplot(enrich_pro)
+
+# for controls
+
+Up.ctrl <- names(clusters[clusters %in% 2])
+pro.ctrl <- gost(query = relevant_gene_names, organism = "hsapiens", significant = TRUE)
+head(pro.ctrl$result)
+gostplot(pro.ctrl)
+```
+
+According to the gostplot, many genes that are upregulated in either the normal or tumor samples are associated with molecular function. 
+
+***
+
+#Gene expression and survival
+#I already have the top differentially expressed genes, ordered by significance, in the limma_res$topGenes dataframe, so I just have to take the first one.
+
+```{r}
+expr_df = limma_res$topGenes
+print(expr_df[1, ])
+
+# get the ensembl gene id of the first row
+gene_id = expr_df[1, "gene_id"]
+
+# also get the common gene name of the first row
+gene_name = expr_df[1, "gene_name"]
+
+#Now, I have selected a gene. Let’s visualize how much differentially expressed it is:
+
+# visualize the gene expression distribution on the Metastatic (in black)
+# versus the Primary tumor (in red)
+expr_st = d_mat[rownames(clin_df), gene_id]
+expr_Primary_tumor = d_mat[setdiff(rownames(d_mat), rownames(clin_df)), gene_id]
+
+boxplot(expr_st, expr_Primary_tumor,
+        names=c("Solid", "Primary"), 
+        main="Distribution of gene expression",
+        col=c("darkgreen", "purple"))
+
+```
+
+#To check whether its expression also influences prognosis, I took all the expression values in the primary samples, then take the median of them.
+
+```{r}
+# get the expression values for the selected gene
+clin_df$gene_value = d_mat[rownames(clin_df), gene_id]
+
+# find the median value of the gene and print it
+median_value = median(clin_df$gene_value)
+print(median_value)
+
+
+#I put all of the patients with expression greater than the median in the up-regulated groups, and the others in the down-regulated group:
+
+
+clin_df$gene = ifelse(clin_df$gene_value >= median_value, "UP", "DOWN")
+
+
+
+#Again, I fit a survival model, like I did before:
+
+
+fit = survfit(Surv(overall_survival, deceased) ~ gene, data=clin_df)
+
+
+
+
+#Extract the survival p-value and print it:
+
+
+pval = surv_pvalue(fit, data=clin_df)$pval
+print(pval)
+
+
+#Now, it is significant.
+
+
+#Finally, I produced a Kaplan-Meier plot:
+
+ggsurvplot(fit,
+           data=clin_df, 
+           pval=T, 
+           risk.table=T, 
+           title=paste(gene_name),
+           tables.height = 0.30)
+
+```
+
+#This gene doesnt significant difference for prognosis.
+
+
+## Conclusion:
+
+In this project, machine learning was used to train and validate clinical samples to be able to distinguish between normal samples and primary prostate tumor samples through gene expression profiling.
+
